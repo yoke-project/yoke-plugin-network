@@ -1,0 +1,9 @@
+plugin: 1
+id: com.yoke.network
+language: rust
+program: network
+manifest: plugin/com.yoke.network.yaml
+build:
+  in: plugin/
+  run: cargo build --release --target "$YOKE_RUST_TARGET" && cp "target/$YOKE_RUST_TARGET/release/network" "$YOKE_OUT/network"
+architectures: [x86_64, aarch64]

@@ -1,0 +1,15 @@
+model: 1
+id: com.yoke.network-try
+version: 0.1.0
+arch: x86_64
+core: ">=0.15.0"
+units:
+  network:
+    kind: plugin
+    plugin: com.yoke.network
+    exec: components/plugins/network
+    digest: sha256:60376c67350be030491ae6fbc076147d3f005fe263ea7f6787bd96e459ab58d4
+channels:
+  panel:
+    transport: local
+    clients: single

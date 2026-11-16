@@ -1,0 +1,8 @@
+plugins:
+  - id: com.yoke.network
+    unit: network
+    source: ..
+    tag: null
+    arch: x86_64
+    digest: sha256:60376c67350be030491ae6fbc076147d3f005fe263ea7f6787bd96e459ab58d4
+    taken: 2026-11-16T17:39:01Z

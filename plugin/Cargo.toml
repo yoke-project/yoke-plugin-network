@@ -1,0 +1,43 @@
+[package]
+name = "network"
+version = "0.1.0"
+edition = "2021"
+publish = false
+autobins = false
+
+[lib]
+name = "network"
+path = "src/lib.rs"
+
+[[bin]]
+name = "network"
+path = "src/main.rs"
+
+# A command-line client of the backend alone, with no Core: what the manager says, and what this account
+# may do with it.
+[[bin]]
+name = "netctl"
+path = "src/bin/netctl.rs"
+
+[features]
+default = ["backend-nm", "backend-connman"]
+backend-nm = []
+backend-connman = []
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+async-trait = "0.1"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+zvariant = "5"
+thiserror = "1"
+tracing = "0.1"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+yoke-sdk = "=0.8.0"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
+
+# A Plugin is a program of its own, never a member of a workspace around it.
+[workspace]

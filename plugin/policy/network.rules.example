@@ -1,0 +1,25 @@
+// PolicyKit rules example for the Yoke network plugin.
+//
+// Copy to /etc/polkit-1/rules.d/49-yoke-network.rules and adjust the
+// "yoke" username/group to match the user running yoke-core.
+//
+// This grants NetworkManager modify-system, network-control and wifi.scan
+// to the yoke user without an interactive prompt — suitable for headless
+// deployments where the plugin runs under a systemd service user.
+//
+// For desktop deployments where yoke-core impersonates an interactive user
+// already in the wheel/sudo group, this file is NOT needed: polkit's default
+// rules grant the actions on the user's authenticated session.
+
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "yoke") return polkit.Result.NOT_HANDLED;
+
+    if (action.id === "org.freedesktop.NetworkManager.network-control" ||
+        action.id === "org.freedesktop.NetworkManager.settings.modify.system" ||
+        action.id === "org.freedesktop.NetworkManager.settings.modify.own"   ||
+        action.id === "org.freedesktop.NetworkManager.wifi.scan") {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

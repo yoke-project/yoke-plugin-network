@@ -1,0 +1,665 @@
+import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ScrollView, Switch, TabWidget } from "std-widgets.slint";
+
+export struct ApRow {
+    ssid:       string,
+    signal:     int,
+    security:   string,
+    channel:    int,
+    in_use:     bool,
+    // UUID of the saved profile for this SSID; empty when the network is new.
+    saved_uuid: string,
+}
+
+export struct DeviceRow {
+    name:  string,
+    kind:  string,
+    state: string,
+    link:  string,
+    mac:   string,
+    ssid:  string,
+    ip4:   string,
+    ip6:   string,
+    gw:    string,
+    dns:   string,
+    speed: string,
+}
+
+export struct ProfileRow {
+    uuid:        string,
+    id:          string,
+    kind:        string,
+    ssid:        string,
+    security:    string,
+    autoconnect: bool,
+    last_used:   string,
+}
+
+export struct PermRow {
+    action: string,
+    result: string,
+}
+
+export struct EapForm {
+    method:               string,
+    identity:             string,
+    password:             string,
+    anonymous:            string,
+    ca_cert:              string,
+    client_cert:          string,
+    private_key:          string,
+    private_key_password: string,
+    phase2:               string,
+}
+
+export struct Ipv4Form {
+    method:  string,
+    address: string,
+    prefix:  string,
+    gateway: string,
+    dns:     string,
+}
+
+export struct ProfileEdit {
+    password:    string,
+    eap:         EapForm,
+    change_ipv4: bool,
+    ipv4:        Ipv4Form,
+    // "keep" | "disabled" | "auto"
+    ipv6:        string,
+}
+
+component SignalBars inherits Rectangle {
+    in property <int> percent;
+    width: 36px;
+    height: 16px;
+    for i in 4 : Rectangle {
+        x: i * 9px;
+        width: 7px;
+        height: 4px + i * 4px;
+        y: parent.height - self.height;
+        border-radius: 1px;
+        background: root.percent >= (i + 1) * 25 - 12 ? Palette.accent-background : Palette.border;
+    }
+}
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 6px;
+    visible: value != "";
+    Text { text: root.label; width: 70px; color: Palette.foreground.transparentize(0.4); font-size: 12px; }
+    Text { text: root.value; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
+}
+
+// Label on the left, any input on the right.
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 8px;
+    Text { text: root.label; width: 150px; vertical-alignment: center; }
+    @children
+}
+
+component Ipv4Editor inherits VerticalLayout {
+    in-out property <string> method: "auto";
+    in-out property <string> address;
+    in-out property <string> prefix: "24";
+    in-out property <string> gateway;
+    in-out property <string> dns;
+    spacing: 6px;
+
+    Row { label: "Method"; ComboBox { model: ["auto", "manual"]; current-value <=> root.method; } }
+    Row { label: "Address"; LineEdit { text <=> root.address; placeholder-text: "192.168.1.50"; enabled: root.method == "manual"; } }
+    Row { label: "Prefix length"; LineEdit { text <=> root.prefix; placeholder-text: "24"; enabled: root.method == "manual"; } }
+    Row { label: "Gateway"; LineEdit { text <=> root.gateway; placeholder-text: "192.168.1.1"; enabled: root.method == "manual"; } }
+    Row { label: "DNS servers"; LineEdit { text <=> root.dns; placeholder-text: "1.1.1.1, 8.8.8.8"; } }
+}
+
+component EapEditor inherits VerticalLayout {
+    in-out property <string> method: "peap";
+    in-out property <string> identity;
+    in-out property <string> password;
+    in-out property <string> anonymous;
+    in-out property <string> ca_cert;
+    in-out property <string> client_cert;
+    in-out property <string> private_key;
+    in-out property <string> private_key_password;
+    in-out property <string> phase2: "mschapv2";
+    spacing: 6px;
+
+    Row { label: "EAP method"; ComboBox { model: ["peap", "ttls", "tls"]; current-value <=> root.method; } }
+    Row { label: "Identity"; LineEdit { text <=> root.identity; } }
+    Row {
+        label: "Password";
+        visible: root.method != "tls";
+        LineEdit { text <=> root.password; input-type: InputType.password; }
+    }
+    Row {
+        label: "Anonymous identity";
+        visible: root.method != "tls";
+        LineEdit { text <=> root.anonymous; }
+    }
+    Row {
+        label: "Phase 2";
+        visible: root.method != "tls";
+        ComboBox { model: ["mschapv2", "mschap", "pap", "gtc"]; current-value <=> root.phase2; }
+    }
+    Row { label: "CA certificate"; LineEdit { text <=> root.ca_cert; placeholder-text: "/path/ca.pem (optional)"; } }
+    Row {
+        label: "Client certificate";
+        visible: root.method == "tls";
+        LineEdit { text <=> root.client_cert; placeholder-text: "/path/client.pem"; }
+    }
+    Row {
+        label: "Private key";
+        visible: root.method == "tls";
+        LineEdit { text <=> root.private_key; placeholder-text: "/path/key.pem"; }
+    }
+    Row {
+        label: "Key password";
+        visible: root.method == "tls";
+        LineEdit { text <=> root.private_key_password; input-type: InputType.password; }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Network";
+    preferred-width: 920px;
+    preferred-height: 700px;
+
+    in property <string> backend_name;
+    in-out property <string> message: "Starting...";
+    in property <bool> busy;
+    in property <[ApRow]> aps;
+    in property <[DeviceRow]> devices;
+    in property <[ProfileRow]> profiles;
+    in property <[string]> eth_devices;
+    in property <[string]> events;
+    in property <[PermRow]> permissions;
+
+    callback scan();
+    callback disconnect();
+    callback connect(string /*ssid*/, string /*security*/, string /*password*/, bool /*hidden*/);
+    callback connect_eap(string /*ssid*/, EapForm, bool /*hidden*/);
+    callback activate(string /*uuid*/);
+    callback forget(string /*uuid*/);
+    callback set_autoconnect(string /*uuid*/, bool);
+    callback edit_profile(string /*uuid*/, ProfileEdit);
+    callback apply_ethernet(string /*device*/, Ipv4Form);
+    callback hotspot_start(string /*ssid*/, string /*password*/, string /*band*/, string /*channel*/);
+    callback hotspot_stop();
+    callback clear_events();
+    callback refresh_permissions();
+
+    // Dialog: "" | "connect" | "edit"
+    property <string> dialog;
+    property <bool> dialog_hidden;
+    property <string> dialog_ssid;
+    property <string> dialog_security;
+    property <string> dialog_title;
+    property <string> dialog_uuid;
+    property <string> dialog_password;
+    property <bool> dialog_change_ipv4;
+    property <string> dialog_ipv6: "keep";
+    // Two-step forget
+    property <string> confirm_forget;
+
+    // Editors inside the dialog (ids inside `if` are not reachable from outside,
+    // so the dialog keeps its state here).
+    property <string> eap_method: "peap";
+    property <string> eap_identity;
+    property <string> eap_password;
+    property <string> eap_anonymous;
+    property <string> eap_ca;
+    property <string> eap_client_cert;
+    property <string> eap_key;
+    property <string> eap_key_password;
+    property <string> eap_phase2: "mschapv2";
+    property <string> ip_method: "auto";
+    property <string> ip_address;
+    property <string> ip_prefix: "24";
+    property <string> ip_gateway;
+    property <string> ip_dns;
+
+    // Ethernet tab
+    in-out property <string> eth_device;
+    property <string> eth_method: "auto";
+    property <string> eth_address;
+    property <string> eth_prefix: "24";
+    property <string> eth_gateway;
+    property <string> eth_dns;
+
+    // Hotspot tab
+    property <string> hs_ssid;
+    property <string> hs_password;
+    property <string> hs_band: "bg";
+    property <string> hs_channel;
+
+    function reset_dialog_fields() {
+        dialog_password = "";
+        eap_method = "peap"; eap_identity = ""; eap_password = ""; eap_anonymous = "";
+        eap_ca = ""; eap_client_cert = ""; eap_key = ""; eap_key_password = ""; eap_phase2 = "mschapv2";
+        ip_method = "auto"; ip_address = ""; ip_prefix = "24"; ip_gateway = ""; ip_dns = "";
+        dialog_change_ipv4 = false;
+        dialog_ipv6 = "keep";
+    }
+
+    function open_connect(ssid: string, security: string, hidden: bool) {
+        reset_dialog_fields();
+        dialog_ssid = ssid;
+        dialog_security = security;
+        dialog_hidden = hidden;
+        dialog_title = hidden ? "Connect to hidden network" : "Connect to " + ssid;
+        dialog = "connect";
+    }
+
+    function open_edit(p: ProfileRow) {
+        reset_dialog_fields();
+        dialog_uuid = p.uuid;
+        dialog_security = p.security;
+        dialog_title = "Edit " + p.id;
+        dialog = "edit";
+    }
+
+    function eap_form() -> EapForm {
+        return {
+            method: eap_method, identity: eap_identity, password: eap_password,
+            anonymous: eap_anonymous, ca_cert: eap_ca, client_cert: eap_client_cert,
+            private_key: eap_key, private_key_password: eap_key_password, phase2: eap_phase2,
+        };
+    }
+
+    function ipv4_form() -> Ipv4Form {
+        return { method: ip_method, address: ip_address, prefix: ip_prefix, gateway: ip_gateway, dns: ip_dns };
+    }
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.message;
+                font-weight: 700;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+            Text {
+                visible: root.busy;
+                text: "working...";
+                vertical-alignment: center;
+                color: Palette.accent-background;
+            }
+            Text {
+                text: root.backend_name;
+                vertical-alignment: center;
+                color: Palette.foreground.transparentize(0.5);
+                font-size: 12px;
+            }
+        }
+
+        TabWidget {
+            vertical-stretch: 1;
+
+            Tab {
+                title: "Wi-Fi";
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Button { text: "Scan"; clicked => { root.scan(); } }
+                        Button { text: "Hidden network..."; clicked => { root.open_connect("", "wpa2-psk", true); } }
+                        Button { text: "Disconnect"; clicked => { root.disconnect(); } }
+                    }
+                    ListView {
+                        for ap in root.aps : Rectangle {
+                            height: 40px;
+                            background: ap.in_use ? Palette.accent-background.transparentize(0.8) : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px; padding-right: 8px; spacing: 10px;
+                                SignalBars { percent: ap.signal; y: (parent.height - self.height) / 2; }
+                                Text {
+                                    text: ap.ssid + (ap.saved_uuid != "" ? "  (saved)" : "");
+                                    vertical-alignment: center;
+                                    font-weight: ap.in_use ? 700 : 400;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Text { text: ap.security; vertical-alignment: center; width: 80px; }
+                                Text { text: "ch " + ap.channel; vertical-alignment: center; width: 50px; }
+                                Text { text: ap.signal + "%"; vertical-alignment: center; width: 40px; horizontal-alignment: right; }
+                                if ap.in_use : Text {
+                                    text: "connected"; vertical-alignment: center; width: 90px;
+                                    color: Palette.accent-background;
+                                }
+                                if !ap.in_use : Button {
+                                    text: "Connect";
+                                    width: 90px;
+                                    clicked => {
+                                        if (ap.saved_uuid != "") {
+                                            // Known network: reuse its profile instead of creating a new one.
+                                            root.activate(ap.saved_uuid);
+                                        } else if (ap.security == "open") {
+                                            root.connect(ap.ssid, ap.security, "", false);
+                                        } else {
+                                            root.open_connect(ap.ssid, ap.security, false);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Ethernet";
+                VerticalLayout {
+                    padding: 12px; spacing: 8px; alignment: start;
+                    Row {
+                        label: "Interface";
+                        ComboBox { model: root.eth_devices; current-value <=> root.eth_device; }
+                    }
+                    Ipv4Editor {
+                        method <=> root.eth_method;
+                        address <=> root.eth_address;
+                        prefix <=> root.eth_prefix;
+                        gateway <=> root.eth_gateway;
+                        dns <=> root.eth_dns;
+                    }
+                    Text {
+                        text: "Applying creates (or updates) the profile \"netui-<interface>\" and activates it: the interface may briefly lose its link.";
+                        wrap: word-wrap;
+                        font-size: 12px;
+                        color: Palette.foreground.transparentize(0.4);
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: "Apply";
+                            primary: true;
+                            enabled: root.eth_device != "";
+                            clicked => {
+                                root.apply_ethernet(root.eth_device, {
+                                    method: root.eth_method, address: root.eth_address,
+                                    prefix: root.eth_prefix, gateway: root.eth_gateway, dns: root.eth_dns,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Hotspot";
+                VerticalLayout {
+                    padding: 12px; spacing: 8px; alignment: start;
+                    Row { label: "SSID"; LineEdit { text <=> root.hs_ssid; } }
+                    Row { label: "Password (8+ chars)"; LineEdit { text <=> root.hs_password; input-type: InputType.password; } }
+                    Row { label: "Band"; ComboBox { model: ["bg", "a"]; current-value <=> root.hs_band; } }
+                    Row { label: "Channel"; LineEdit { text <=> root.hs_channel; placeholder-text: "empty = automatic"; } }
+                    Text {
+                        text: "The hotspot uses the Wi-Fi interface: the current Wi-Fi connection is dropped while it runs.";
+                        wrap: word-wrap;
+                        font-size: 12px;
+                        color: Palette.foreground.transparentize(0.4);
+                    }
+                    HorizontalLayout {
+                        spacing: 8px; alignment: start;
+                        Button {
+                            text: "Start hotspot";
+                            primary: true;
+                            enabled: root.hs_ssid != "" && root.hs_password != "";
+                            clicked => { root.hotspot_start(root.hs_ssid, root.hs_password, root.hs_band, root.hs_channel); }
+                        }
+                        Button { text: "Stop hotspot"; clicked => { root.hotspot_stop(); } }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Devices";
+                ListView {
+                    for d in root.devices : Rectangle {
+                        height: 146px;
+                        VerticalLayout {
+                            padding: 8px; spacing: 3px;
+                            Text { text: d.name + "  (" + d.kind + ", " + d.state + ", link " + d.link + ")"; font-weight: 700; }
+                            Field { label: "MAC";     value: d.mac; }
+                            Field { label: "SSID";    value: d.ssid; }
+                            Field { label: "IPv4";    value: d.ip4; }
+                            Field { label: "IPv6";    value: d.ip6; }
+                            Field { label: "Gateway"; value: d.gw; }
+                            Field { label: "DNS";     value: d.dns; }
+                            Field { label: "Speed";   value: d.speed; }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Profiles";
+                ListView {
+                    for p in root.profiles : Rectangle {
+                        height: 48px;
+                        HorizontalLayout {
+                            padding-left: 8px; padding-right: 8px; spacing: 8px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                Text { text: p.id; font-weight: 700; overflow: elide; }
+                                Text {
+                                    text: p.kind + (p.ssid != "" ? " - " + p.ssid : "") + (p.security != "" ? " - " + p.security : "")
+                                        + (p.last_used != "" ? " - used " + p.last_used : "");
+                                    font-size: 12px;
+                                    color: Palette.foreground.transparentize(0.4);
+                                    overflow: elide;
+                                }
+                            }
+                            Text { text: "autoconnect"; vertical-alignment: center; font-size: 12px; }
+                            Switch {
+                                checked: p.autoconnect;
+                                toggled => { root.set_autoconnect(p.uuid, self.checked); }
+                            }
+                            Button { text: "Connect"; width: 80px; clicked => { root.activate(p.uuid); } }
+                            Button { text: "Edit"; width: 60px; clicked => { root.open_edit(p); } }
+                            Button {
+                                text: root.confirm_forget == p.uuid ? "Confirm?" : "Forget";
+                                width: 90px;
+                                clicked => {
+                                    if (root.confirm_forget == p.uuid) {
+                                        root.confirm_forget = "";
+                                        root.forget(p.uuid);
+                                    } else {
+                                        root.confirm_forget = p.uuid;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Events";
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px; alignment: start;
+                        Button { text: "Clear"; clicked => { root.clear_events(); } }
+                        Text {
+                            text: root.events.length + " events (newest first, last 300 kept)";
+                            vertical-alignment: center; font-size: 12px;
+                            color: Palette.foreground.transparentize(0.4);
+                        }
+                    }
+                    ListView {
+                        for line in root.events : Text {
+                            text: line;
+                            font-family: "monospace";
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Scope";
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px; alignment: start;
+                        Button { text: "Refresh"; clicked => { root.refresh_permissions(); } }
+                        Text {
+                            text: "What this user may do on the backend (polkit): yes = allowed, auth = needs authentication, no = denied";
+                            vertical-alignment: center; font-size: 12px;
+                            color: Palette.foreground.transparentize(0.4);
+                        }
+                    }
+                    ListView {
+                        for p in root.permissions : Rectangle {
+                            height: 28px;
+                            HorizontalLayout {
+                                padding-left: 8px; spacing: 10px;
+                                Text { text: p.action; vertical-alignment: center; horizontal-stretch: 1; font-family: "monospace"; font-size: 13px; }
+                                Text {
+                                    text: p.result; vertical-alignment: center; width: 60px; font-weight: 700;
+                                    color: p.result == "yes" ? #2e9e4f : (p.result == "no" ? #cc3b3b : #c58a00);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Dialog overlay: blocks the content underneath.
+    if root.dialog != "" : Rectangle {
+        background: #00000099;
+        TouchArea { }
+        Rectangle {
+            // Visible form rows decide the height: a ScrollView has no size of its own.
+            property <int> rows: root.dialog == "connect"
+                ? (root.dialog_hidden ? 2 : 0)
+                    + (root.dialog_security == "wpa-eap" ? 6 : (root.dialog_security != "open" ? 1 : 0))
+                : (root.dialog_security == "wpa-eap" ? 7 : 1) + 1 + (root.dialog_change_ipv4 ? 5 : 0) + 1;
+            width: min(520px, parent.width - 40px);
+            height: min(parent.height - 40px, self.rows * 38px + 120px);
+            background: Palette.background;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Palette.border;
+
+            VerticalLayout {
+                padding: 16px; spacing: 10px;
+                Text { text: root.dialog_title; font-size: 16px; font-weight: 700; wrap: word-wrap; }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        // ---- connect ----
+                        if root.dialog == "connect" && root.dialog_hidden : Row {
+                            label: "SSID";
+                            LineEdit { edited(t) => { root.dialog_ssid = t; } }
+                        }
+                        if root.dialog == "connect" && root.dialog_hidden : Row {
+                            label: "Security";
+                            ComboBox {
+                                model: ["open", "wpa2-psk", "wpa3-psk", "wpa-eap"];
+                                current-index: 1;
+                                selected(v) => { root.dialog_security = v; }
+                            }
+                        }
+                        if root.dialog == "connect" && root.dialog_security != "open" && root.dialog_security != "wpa-eap" : Row {
+                            label: "Password";
+                            LineEdit { text <=> root.dialog_password; input-type: InputType.password; }
+                        }
+                        if root.dialog == "connect" && root.dialog_security == "wpa-eap" : EapEditor {
+                            method <=> root.eap_method;
+                            identity <=> root.eap_identity;
+                            password <=> root.eap_password;
+                            anonymous <=> root.eap_anonymous;
+                            ca_cert <=> root.eap_ca;
+                            client_cert <=> root.eap_client_cert;
+                            private_key <=> root.eap_key;
+                            private_key_password <=> root.eap_key_password;
+                            phase2 <=> root.eap_phase2;
+                        }
+
+                        // ---- edit profile ----
+                        if root.dialog == "edit" && root.dialog_security != "wpa-eap" : Row {
+                            label: "New password";
+                            LineEdit { text <=> root.dialog_password; input-type: InputType.password; placeholder-text: "leave empty to keep"; }
+                        }
+                        if root.dialog == "edit" && root.dialog_security == "wpa-eap" : Text {
+                            text: "802.1X: fill identity to update it (empty fields keep the stored values)";
+                            wrap: word-wrap; font-size: 12px;
+                        }
+                        if root.dialog == "edit" && root.dialog_security == "wpa-eap" : EapEditor {
+                            method <=> root.eap_method;
+                            identity <=> root.eap_identity;
+                            password <=> root.eap_password;
+                            anonymous <=> root.eap_anonymous;
+                            ca_cert <=> root.eap_ca;
+                            client_cert <=> root.eap_client_cert;
+                            private_key <=> root.eap_key;
+                            private_key_password <=> root.eap_key_password;
+                            phase2 <=> root.eap_phase2;
+                        }
+                        if root.dialog == "edit" : CheckBox {
+                            text: "Change IPv4 settings";
+                            checked <=> root.dialog_change_ipv4;
+                        }
+                        if root.dialog == "edit" && root.dialog_change_ipv4 : Ipv4Editor {
+                            method <=> root.ip_method;
+                            address <=> root.ip_address;
+                            prefix <=> root.ip_prefix;
+                            gateway <=> root.ip_gateway;
+                            dns <=> root.ip_dns;
+                        }
+                        if root.dialog == "edit" : Row {
+                            label: "IPv6";
+                            ComboBox {
+                                model: ["keep", "disabled", "auto"];
+                                current-value <=> root.dialog_ipv6;
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px; alignment: end;
+                    Button { text: "Cancel"; clicked => { root.dialog = ""; root.reset_dialog_fields(); } }
+                    Button {
+                        text: root.dialog == "edit" ? "Save" : "Connect";
+                        primary: true;
+                        enabled: root.dialog == "edit" || root.dialog_ssid != "";
+                        clicked => {
+                            if (root.dialog == "edit") {
+                                root.edit_profile(root.dialog_uuid, {
+                                    password: root.dialog_password,
+                                    eap: root.eap_form(),
+                                    change_ipv4: root.dialog_change_ipv4,
+                                    ipv4: root.ipv4_form(),
+                                    ipv6: root.dialog_ipv6,
+                                });
+                            } else if (root.dialog_security == "wpa-eap") {
+                                root.connect_eap(root.dialog_ssid, root.eap_form(), root.dialog_hidden);
+                            } else {
+                                root.connect(root.dialog_ssid, root.dialog_security, root.dialog_password, root.dialog_hidden);
+                            }
+                            root.dialog = "";
+                            root.reset_dialog_fields();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

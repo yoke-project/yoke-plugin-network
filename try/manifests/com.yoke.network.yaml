@@ -1,0 +1,90 @@
+manifest: 1
+id: com.yoke.network
+protocol: 1
+streams:
+  - id: network.status
+  - id: network.devices
+    tolerates_loss: true
+  - id: network.scan
+    tolerates_loss: true
+commands:
+  - id: network.wifi.scan
+  - id: network.wifi.connect
+  - id: network.wifi.disconnect
+  - id: network.wifi.hotspot.start
+  - id: network.wifi.hotspot.stop
+  - id: network.profiles.activate
+  - id: network.profiles.update
+  - id: network.profiles.forget
+  - id: network.ethernet.apply
+queries:
+  - id: network.status
+  - id: network.devices
+  - id: network.access-points
+  - id: network.profiles
+  - id: network.permissions
+occurrences:
+  - id: network.connected
+  - id: network.disconnected
+  - id: network.job.finished
+capabilities:
+  - name: query.network.status.answer
+    governs:
+      query: network.status
+  - name: query.network.devices.answer
+    governs:
+      query: network.devices
+  - name: query.network.access-points.answer
+    governs:
+      query: network.access-points
+  - name: query.network.profiles.answer
+    governs:
+      query: network.profiles
+  - name: query.network.permissions.answer
+    governs:
+      query: network.permissions
+  - name: command.network.wifi.scan.accept
+    governs:
+      command: network.wifi.scan
+  - name: command.network.wifi.connect.accept
+    governs:
+      command: network.wifi.connect
+  - name: command.network.wifi.disconnect.accept
+    governs:
+      command: network.wifi.disconnect
+  - name: command.network.wifi.hotspot.start.accept
+    governs:
+      command: network.wifi.hotspot.start
+  - name: command.network.wifi.hotspot.stop.accept
+    governs:
+      command: network.wifi.hotspot.stop
+  - name: command.network.profiles.activate.accept
+    governs:
+      command: network.profiles.activate
+  - name: command.network.profiles.update.accept
+    governs:
+      command: network.profiles.update
+  - name: command.network.profiles.forget.accept
+    governs:
+      command: network.profiles.forget
+  - name: command.network.ethernet.apply.accept
+    governs:
+      command: network.ethernet.apply
+  - name: stream.network.status.publish
+    governs:
+      stream: network.status
+  - name: stream.network.devices.publish
+    governs:
+      stream: network.devices
+  - name: stream.network.scan.publish
+    governs:
+      stream: network.scan
+  - name: event.network.connected.report
+    governs:
+      occurrence: network.connected
+  - name: event.network.disconnected.report
+    governs:
+      occurrence: network.disconnected
+  - name: event.network.job.finished.report
+    governs:
+      occurrence: network.job.finished
