@@ -20,7 +20,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -45,7 +45,9 @@ pub const ACCESS_POINTS: &str = "network.access-points";
 pub const PROFILES: &str = "network.profiles";
 /// What this account may do with the manager.
 pub const PERMISSIONS: &str = "network.permissions";
-pub const QUERIES: [&str; 5] = [STATUS, DEVICES, ACCESS_POINTS, PROFILES, PERMISSIONS];
+/// The link the host is on its network through: its signal, and what it carries, with its sequence.
+pub const LINK: &str = "network.link";
+pub const QUERIES: [&str; 6] = [STATUS, DEVICES, ACCESS_POINTS, PROFILES, PERMISSIONS, LINK];
 
 pub const WIFI_SCAN: &str = "network.wifi.scan";
 pub const WIFI_CONNECT: &str = "network.wifi.connect";
@@ -70,7 +72,7 @@ pub const COMMANDS: [&str; 9] = [
 
 /// The access points in range, while it flows.
 pub const SCAN: &str = "network.scan";
-pub const STREAMS: [&str; 3] = [STATUS, DEVICES, SCAN];
+pub const STREAMS: [&str; 4] = [STATUS, DEVICES, SCAN, LINK];
 
 /// The host came onto a network.
 pub const CONNECTED: &str = "network.connected";
@@ -100,6 +102,8 @@ pub fn declaration() -> Declaration {
             // Each of these two is the whole picture again, so a lost one is made good by the next.
             Stream { id: DEVICES.into(), tolerates_loss: true, tolerates_reorder: false, max_frame: 0 },
             Stream { id: SCAN.into(), tolerates_loss: true, tolerates_reorder: false, max_frame: 0 },
+            // A reading of the link is whole, and the next one says what a lost one would have.
+            Stream { id: LINK.into(), tolerates_loss: true, tolerates_reorder: false, max_frame: 0 },
         ],
         occurrences: OCCURRENCES.iter().map(|o| o.to_string()).collect(),
         capabilities: QUERIES
@@ -406,6 +410,30 @@ impl Status {
     }
 }
 
+/// The link as last read: the reading's count, the record, and the counters it was read with.
+struct Link {
+    sequence: u64,
+    record: Value,
+    last: Option<(String, u64, u64, Instant)>,
+}
+
+/// A device's received and sent bytes, as the kernel counts them since it came up.
+pub type Counters = Box<dyn Fn(&str) -> Option<(u64, u64)> + Send + Sync>;
+
+/// The kernel's counters of a device, from `/sys/class/net`.
+pub fn kernel_counters() -> Counters {
+    Box::new(|device: &str| {
+        let read = |what: &str| {
+            std::fs::read_to_string(format!("/sys/class/net/{device}/statistics/{what}"))
+                .ok()?
+                .trim()
+                .parse::<u64>()
+                .ok()
+        };
+        Some((read("rx_bytes")?, read("tx_bytes")?))
+    })
+}
+
 pub type Backend = Result<Arc<dyn NetworkBackend>, NetworkError>;
 
 /// The Plugin's state: the manager, the status and its sequence, and which streams flow.
@@ -418,12 +446,20 @@ pub struct Net {
     status_flows: AtomicBool,
     devices_flow: AtomicBool,
     scan_flows: AtomicBool,
+    link: Mutex<Link>,
+    link_flows: AtomicBool,
+    counters: Counters,
 }
 
 impl Net {
     /// The second value brings the steps of a connection being made; whoever holds it hands each to
     /// [`Net::on_progress`].
     pub fn new(backend: Backend) -> (Arc<Net>, mpsc::Receiver<bt::ProgressUpdate>) {
+        Net::with_counters(backend, kernel_counters())
+    }
+
+    /// As [`Net::new`], with the counters a test stands in for the kernel's.
+    pub fn with_counters(backend: Backend, counters: Counters) -> (Arc<Net>, mpsc::Receiver<bt::ProgressUpdate>) {
         let (progress, steps) = mpsc::channel(64);
         let net = Net {
             backend,
@@ -433,6 +469,9 @@ impl Net {
             status_flows: AtomicBool::new(false),
             devices_flow: AtomicBool::new(false),
             scan_flows: AtomicBool::new(false),
+            link: Mutex::new(Link { sequence: 0, record: Value::Null, last: None }),
+            link_flows: AtomicBool::new(false),
+            counters,
         };
         (Arc::new(net), steps)
     }
@@ -448,11 +487,74 @@ impl Net {
         self.scan_flows.load(Ordering::Relaxed)
     }
 
+    /// Whether `network.link` flows, which is what the caller reads it on a clock for.
+    pub fn linking(&self) -> bool {
+        self.link_flows.load(Ordering::Relaxed)
+    }
+
+    /// Reads the link once: the device the host is on its network through, the signal of the access
+    /// point it is joined to where it is Wi-Fi, and the bytes a second it received and sent since the
+    /// last reading of that device — none at the first, or after the device changed. Every reading is
+    /// counted, whether or not it is emitted.
+    async fn read_link(&self) -> Value {
+        let devices = match &self.backend {
+            Ok(b) => b.list_devices().await.unwrap_or_default(),
+            Err(_) => vec![],
+        };
+        let d = primary(&devices);
+        let signal = match (d, &self.backend) {
+            (Some(d), Ok(b)) if d.kind == bt::DeviceKind::Wifi => b
+                .list_access_points(Some(&d.name))
+                .await
+                .ok()
+                .and_then(|aps| aps.iter().find(|a| a.in_use).map(|a| a.signal_pct)),
+            _ => None,
+        };
+        let now = Instant::now();
+        let counted = d.and_then(|d| (self.counters)(&d.name).map(|(rx, tx)| (d.name.clone(), rx, tx)));
+        let mut link = self.link.lock().unwrap();
+        let rates = match (&counted, &link.last) {
+            (Some((name, rx, tx)), Some((was, prx, ptx, at))) if name == was => {
+                let seconds = now.duration_since(*at).as_secs_f64();
+                if seconds > 0.0 {
+                    let rate = |n: u64, p: u64| (n.saturating_sub(p) as f64 / seconds).round() as u64;
+                    Some((rate(*rx, *prx), rate(*tx, *ptx)))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        link.last = counted.map(|(name, rx, tx)| (name, rx, tx, now));
+        link.sequence += 1;
+        link.record = json!({
+            "schema": SCHEMA,
+            "sequence": link.sequence,
+            "at": now_ms(),
+            "device": d.map(|d| d.name.clone()),
+            "kind": d.map(|d| d.kind.as_str()),
+            "signal_pct": signal,
+            "rx_bytes_per_s": rates.map(|r| r.0),
+            "tx_bytes_per_s": rates.map(|r| r.1),
+        });
+        link.record.clone()
+    }
+
+    /// Reads the link and emits it, while `network.link` flows.
+    pub async fn emit_link(&self, u: &impl Acts) -> Result<(), yoke_sdk::base::Error> {
+        if !self.linking() {
+            return Ok(());
+        }
+        let record = self.read_link().await;
+        u.emit(LINK, record.to_string().into_bytes()).await
+    }
+
     fn flag(&self, stream: &str) -> Option<&AtomicBool> {
         match stream {
             STATUS => Some(&self.status_flows),
             DEVICES => Some(&self.devices_flow),
             SCAN => Some(&self.scan_flows),
+            LINK => Some(&self.link_flows),
             _ => None,
         }
     }
@@ -555,6 +657,7 @@ impl Net {
                 },
                 Err(_) => Ok(()),
             },
+            LINK => self.emit_link(u).await,
             _ => {
                 self.rescan().await;
                 self.emit_scan(u).await
@@ -622,6 +725,13 @@ impl Net {
                 let permissions = self.manager()?.permissions().await?;
                 let permissions: Vec<Value> = permissions.iter().map(|p| json!({ "action": p.action, "result": p.result })).collect();
                 json!({ "schema": SCHEMA, "permissions": permissions })
+            }
+            LINK => {
+                let _: NoInput = input(query, payload)?;
+                self.manager()?;
+                // The last reading; one is taken now where there is none, carrying no rates yet.
+                let last = self.link.lock().unwrap().record.clone();
+                if last.is_null() { self.read_link().await } else { last }
             }
             other => return Err(Error::Invalid(format!("{other} is not a question of {PLUGIN}"))),
         };

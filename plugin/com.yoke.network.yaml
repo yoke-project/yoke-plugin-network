@@ -7,6 +7,8 @@ streams:
     tolerates_loss: true
   - id: network.scan
     tolerates_loss: true
+  - id: network.link
+    tolerates_loss: true
 commands:
   - id: network.wifi.scan
   - id: network.wifi.connect
@@ -23,6 +25,7 @@ queries:
   - id: network.access-points
   - id: network.profiles
   - id: network.permissions
+  - id: network.link
 occurrences:
   - id: network.connected
   - id: network.disconnected
@@ -43,6 +46,9 @@ capabilities:
   - name: query.network.permissions.answer
     governs:
       query: network.permissions
+  - name: query.network.link.answer
+    governs:
+      query: network.link
   - name: command.network.wifi.scan.accept
     governs:
       command: network.wifi.scan
@@ -79,6 +85,9 @@ capabilities:
   - name: stream.network.scan.publish
     governs:
       stream: network.scan
+  - name: stream.network.link.publish
+    governs:
+      stream: network.link
   - name: event.network.connected.report
     governs:
       occurrence: network.connected
