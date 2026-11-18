@@ -5,9 +5,9 @@ fallback: the connection, the devices, the Wi-Fi networks in range, the saved pr
 
 | | |
 | --- | --- |
-| questions | `network.status` (the connection, with its sequence), `network.devices`, `network.access-points`, `network.profiles`, `network.permissions` |
+| questions | `network.status` (the connection, with its sequence), `network.devices`, `network.access-points`, `network.profiles`, `network.permissions`, `network.link` (the last reading of the link, with its sequence) |
 | commands | `network.wifi.scan`, `network.wifi.connect`, `network.wifi.disconnect`, `network.wifi.hotspot.start`, `network.wifi.hotspot.stop`, `network.profiles.activate`, `network.profiles.update`, `network.profiles.forget`, `network.ethernet.apply` |
-| streams | `network.status`: every change of the connection and every step of one being made, none lost; `network.devices`: the devices, whole, at every change; `network.scan`: the access points in range, the manager asked to scan only while it flows |
+| streams | `network.status`: every change of the connection and every step of one being made, none lost; `network.devices`: the devices, whole, at every change; `network.scan`: the access points in range, the manager asked to scan only while it flows; `network.link`: every 2 s while it flows, the device the host is on its network through, the signal of the access point it is joined to, and the bytes a second it receives and sends |
 | occurrences | `network.connected` (10), `network.disconnected` (30), `network.job.finished` when a command acknowledged as still running ends |
 
 Every payload is JSON and states `schema`. A question takes `{}`, `network.access-points` an optional
@@ -20,7 +20,7 @@ Every occurrence carries its facts as JSON in its detail — `line`, and the dev
 command — which is what an interface client receives.
 
 **An interface that attaches late** subscribes to `network.status`, then asks it, and drops what the
-stream brings at or below the sequence it was answered with.
+stream brings at or below the sequence it was answered with; `network.link` is joined the same way.
 
 **A secret is handed to the manager and written nowhere**: no passphrase reaches a log line, an
 acknowledgement or a failure's message.

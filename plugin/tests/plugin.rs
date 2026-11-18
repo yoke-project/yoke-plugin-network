@@ -252,6 +252,46 @@ async fn a_change_is_counted_once_emitted_where_the_stream_flows_and_reported() 
 }
 
 #[tokio::test]
+async fn the_link_carries_the_signal_and_the_bytes_a_second_with_its_sequence() {
+    let fake = Fake::new();
+    let core = Core::default();
+    // The kernel's counters of wlan0, which the case moves.
+    let counted = Arc::new(Mutex::new((1_000u64, 500u64)));
+    let read = counted.clone();
+    let (net, _steps) =
+        Net::with_counters(Ok(fake.clone()), Box::new(move |d: &str| (d == "wlan0").then(|| *read.lock().unwrap())));
+
+    // Asked before it flows: one reading, of the joined access point's signal, with no rate yet.
+    handle(&core, &question(LINK, ""), &net).await.unwrap();
+    let first = json_of(&core.take()[0], 1);
+    assert_eq!((first["sequence"].clone(), first["device"].clone(), first["kind"].clone()), (json!(1), json!("wlan0"), json!("wifi")));
+    assert_eq!(first["signal_pct"], 80);
+    assert!(first["rx_bytes_per_s"].is_null() && first["tx_bytes_per_s"].is_null());
+
+    // While it flows each reading is emitted, with the bytes a second since the one before.
+    net.activated(&core, LINK).await.unwrap();
+    core.take();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    *counted.lock().unwrap() = (1_000 + 200_000, 500 + 20_000);
+    net.emit_link(&core).await.unwrap();
+    let said = core.take();
+    let next = json_of(&said[0], 2);
+    assert!(said[0].starts_with(&format!("emit {LINK}")), "{said:?}");
+    assert_eq!(next["sequence"], 3);
+    let (rx, tx) = (next["rx_bytes_per_s"].as_u64().unwrap(), next["tx_bytes_per_s"].as_u64().unwrap());
+    assert!(rx > 500_000 && rx <= 1_000_000 && tx > 50_000 && tx <= 100_000, "{rx} {tx}");
+
+    // The question answers the last reading, which a late subscriber joins by.
+    handle(&core, &question(LINK, ""), &net).await.unwrap();
+    assert_eq!(json_of(&core.take()[0], 1)["sequence"], 3);
+
+    // Stopped, nothing is read or emitted.
+    net.stopped(LINK);
+    net.emit_link(&core).await.unwrap();
+    assert!(core.take().is_empty());
+}
+
+#[tokio::test]
 async fn a_passphrase_reaches_the_manager_and_nothing_else() {
     let (fake, core) = (Fake::new(), Core::default());
     let (net, mut steps) = Net::new(Ok(fake.clone()));

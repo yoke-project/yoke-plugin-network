@@ -12,6 +12,8 @@ use yoke_sdk::plugin::{start, Event};
 /// again, in ticks of the first.
 const SCAN_TICK: Duration = Duration::from_secs(1);
 const RESCAN_EVERY: u32 = 15;
+/// How often the link is read while `network.link` flows.
+const LINK_TICK: Duration = Duration::from_secs(2);
 
 #[tokio::main]
 async fn main() {
@@ -47,6 +49,9 @@ async fn main() {
     let mut tick = tokio::time::interval(SCAN_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let (mut ticks, mut dirty) = (0u32, false);
+    // Nor is the link read unless `network.link` flows.
+    let mut link_tick = tokio::time::interval(LINK_TICK);
+    link_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("network listens for SIGTERM");
     loop {
@@ -101,6 +106,11 @@ async fn main() {
                     if let Err(err) = net.emit_scan(unit.as_ref()).await {
                         eprintln!("network: {err}");
                     }
+                }
+            },
+            _ = link_tick.tick(), if net.linking() => {
+                if let Err(err) = net.emit_link(unit.as_ref()).await {
+                    eprintln!("network: {err}");
                 }
             },
             _ = term.recv() => {
