@@ -515,7 +515,7 @@ async fn events(c: Ctx) {
         }
     };
     // The library names `Subscribed` and not what it carries, so the definitions are reached directly.
-    use yoke_proto::interface::v1::subscribed::Carries;
+    use yoke_sdk::interface::subscribed::Carries;
     loop {
         match sub.next().await {
             Ok(Some(s)) => match s.carries {
